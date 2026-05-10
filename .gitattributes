@@ -1,0 +1,10 @@
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.ply -diff
+*.svo filter=lfs diff=lfs merge=lfs -text
+*.svo2 filter=lfs diff=lfs merge=lfs -text

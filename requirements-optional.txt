@@ -1,0 +1,3 @@
+# Optional / external dependencies
+# `pyzed` is provided by the Stereolabs ZED SDK Python installation, not normal pip.
+# Install the ZED SDK separately if you want real SVO playback.

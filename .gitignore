@@ -1,0 +1,24 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local virtual environments and installer scratch space
+.venv/
+.venv_test/
+.setup_tmp/
+
+# Local tool caches
+.DS_Store
+.mplconfig/
+.pytest_cache/
+.ruff_cache/
+
+# Generated mapping outputs
+exports/*
+!exports/.gitkeep
+
+# Large local ZED captures. Force-add intentionally shared samples with Git LFS.
+data/svo/*.svo
+data/svo/*.svo2
+!data/svo/.gitkeep
