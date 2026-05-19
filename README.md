@@ -6,7 +6,10 @@ This repo contains the code needed to run the GUI, demo mode, and the underwater
 
 ## Included
 
-- `src/zed_mapping_svo_gui.py`
+- `src/app.py`
+- `src/gui/`
+- `src/zed/`
+- `src/mapping/`
 - `src/underwater/`
 - `requirements.txt`
 - Windows setup and run scripts
@@ -58,6 +61,12 @@ run_gui.bat
 
 If `.venv` exists, the launcher uses it automatically.
 
+The legacy launcher `src/zed_mapping_svo_gui.py` is kept as a compatibility wrapper. The modular entry point is:
+
+```bat
+python -m src.app
+```
+
 ## ZED SDK Note
 
 `pyzed` is not included in `requirements.txt` because it is installed through the official Stereolabs ZED SDK, not normal pip in most setups.
@@ -90,8 +99,21 @@ zed_mapping_shareable/
     svo/
       .gitkeep
   src/
-    __init__.py
+    app.py
     zed_mapping_svo_gui.py
+    gui/
+      __init__.py
+      controls.py
+      main_window.py
+      viewer.py
+    mapping/
+      __init__.py
+      export.py
+      worker.py
+    zed/
+      __init__.py
+      camera.py
+      demo_source.py
     underwater/
       __init__.py
       config.py
