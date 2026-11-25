@@ -81,6 +81,7 @@ class ConfigStore:
 
 class MappingWorker(QtCore.QObject):
     stats_updated = QtCore.Signal(dict)
+    ply_saved = QtCore.Signal(str)
     cloud_updated = QtCore.Signal(object, object)
     traj_updated = QtCore.Signal(object)
     camera_updated = QtCore.Signal(object)
@@ -137,12 +138,12 @@ class MappingWorker(QtCore.QObject):
                     paused = self._paused
                 if stop_requested:
                     break
+                self._handle_side_effect_requests()
                 if paused:
                     time.sleep(0.05)
                     continue
                 config = self.config_store.snapshot()
                 self._underwater_pipeline.update_config(config.underwater)
-                self._handle_side_effect_requests()
                 frame = self.source.read(config)
                 if frame is None:
                     message = "Reached end of source."
@@ -235,6 +236,7 @@ class MappingWorker(QtCore.QObject):
             final_config = self.config_store.snapshot()
             if final_config.auto_export_run_bundle:
                 bundle_paths = write_run_bundle(self._run_bundle_dir, self._map_points, self._map_colors, self._traj, final_config)
+                self.ply_saved.emit(bundle_paths["map"])
                 self._last_stats["last_export_path"] = bundle_paths["map"]
                 self._last_stats["last_traj_path"] = bundle_paths["traj"]
                 self.log.emit(f"Run bundle saved: {self._run_bundle_dir}")
@@ -362,6 +364,7 @@ class MappingWorker(QtCore.QObject):
         if export_path is not None:
             try:
                 write_ply(export_path, self._map_points, self._map_colors)
+                self.ply_saved.emit(export_path)
                 self._last_stats["last_export_path"] = export_path
                 self.log.emit(f"Exported map: {export_path}")
             except Exception as exc:

@@ -70,7 +70,7 @@ def apply_workbench_style(window: QWidget) -> None:
         }
         QPushButton:focus, QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
         QDoubleSpinBox:focus { border-color: #80ddcc; }
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QListWidget {
             color: #e2edf5; background: #0d1822;
         }
         QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
@@ -80,6 +80,9 @@ def apply_workbench_style(window: QWidget) -> None:
         QScrollBar:vertical { background: #142331; width: 8px; margin: 0px; }
         QScrollBar::handle:vertical { background: #516b7d; min-height: 28px; border-radius: 4px; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        QListWidget { border: 1px solid #3a5266; border-radius: 5px; }
+        QListWidget::item { padding: 6px; }
+        QListWidget::item:selected { background: #304f61; color: #e2edf5; }
         QTabWidget::pane { border: 1px solid #304657; border-radius: 6px; }
         QTabBar::tab { color: #bdcfdd; padding: 8px; border-bottom: 2px solid transparent; }
         QTabBar::tab:selected { color: #9be8db; border-bottom-color: #80ddcc; }

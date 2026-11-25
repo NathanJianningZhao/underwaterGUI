@@ -9,7 +9,7 @@ from typing import Dict, Optional
 
 import numpy as np
 from PySide6 import QtCore
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui.appearance import apply_workbench_style, label_dock, scroll_panel
+from src.gui.capture_library import CapturePresets, RecentExports
 from src.gui.controls import FloatParamWidget, IntParamWidget
 from src.gui.viewer import ViewerController
 from src.mapping.export import PROJECT_ROOT, default_export_path, write_ply, write_traj_csv
@@ -56,8 +57,11 @@ class MainWindow(QMainWindow):
     sig_seek = QtCore.Signal(float)
     sig_reset_map = QtCore.Signal()
 
-    def __init__(self):
+    def __init__(self, settings: QSettings | None = None):
         super().__init__()
+        self.capture_settings = settings if settings is not None else QSettings("ZED Mapping Workbench", "Capture")
+        self._capture_label = ""
+        self._capture_source = SOURCE_DEMO
         self.setWindowTitle("ZED Mapping Workbench")
         self.resize(1350, 850)
         self._closing_after_run = False
@@ -134,7 +138,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setObjectName("primaryAction")
         self.btn_pause = QPushButton("Pause")
         self.btn_stop = QPushButton("Stop")
-        self.btn_export = QPushButton("Export point cloud…")
+        self.btn_export = QPushButton("Save PLY…")
         self.btn_export_traj = QPushButton("Export trajectory…")
         self.btn_reset_cam = QPushButton("Reset view")
         self.btn_clear_map = QPushButton("Clear map")
@@ -159,6 +163,7 @@ class MainWindow(QMainWindow):
         for button in (self.btn_start, self.btn_pause, self.btn_stop):
             transport.addWidget(button, 1 if button is self.btn_start else 0)
         run_layout.addLayout(transport)
+        run_layout.addWidget(self.btn_export)
 
         params_group = QGroupBox("Reconstruction")
         params_form = QFormLayout(params_group)
@@ -194,7 +199,8 @@ class MainWindow(QMainWindow):
         params_form.addRow("Export points / frame", self.offline_frame_points)
         params_form.addRow("Preview point limit", self.live_global_cap)
         params_form.addRow("Export point limit", self.offline_global_cap)
-        params_form.addRow("Preview refresh (frames)", self.live_update_every)
+        self.live_update_every.setToolTip("How often to log diagnostics, in processed frames. It does not control rendering.")
+        params_form.addRow("Log interval (frames)", self.live_update_every)
         params_form.addRow("Map range (m)", self.max_distance_m)
         params_form.addRow("Display point size", self.point_size)
         params_form.addRow("Preview history (frames)", self.live_keep_frames)
@@ -300,7 +306,7 @@ class MainWindow(QMainWindow):
         root.addWidget(run_group)
         output_group = QGroupBox("Run outputs")
         output_layout = QVBoxLayout(output_group)
-        for button in (self.btn_export, self.btn_export_traj, self.btn_analyze_runs):
+        for button in (self.btn_export_traj, self.btn_analyze_runs):
             output_layout.addWidget(button)
 
         run_settings = QGroupBox("Experiment files")
@@ -313,11 +319,13 @@ class MainWindow(QMainWindow):
         ):
             files_form.addRow(label, widget)
 
+        self.capture_presets = CapturePresets(self.capture_settings, self._preset_controls(), self._notify_capture)
+        self.recent_exports = RecentExports(self.capture_settings, self._notify_capture)
         self.settings_tabs = QTabWidget()
-        self.settings_tabs.addTab(scroll_panel(params_group), "Map")
+        self.settings_tabs.addTab(scroll_panel(self.capture_presets, params_group), "Map")
         self.settings_tabs.addTab(scroll_panel(playback_group), "Playback")
         self.settings_tabs.addTab(scroll_panel(underwater_group, view_group), "Color / view")
-        self.settings_tabs.addTab(scroll_panel(output_group, run_settings), "Outputs")
+        self.settings_tabs.addTab(scroll_panel(output_group, self.recent_exports, run_settings), "Outputs")
         view_layout.addWidget(self.btn_reset_cam)
         view_layout.addWidget(self.btn_clear_map)
         root.addWidget(self.settings_tabs, 1)
@@ -333,6 +341,30 @@ class MainWindow(QMainWindow):
         else:
             self.source_combo.setCurrentText(SOURCE_DEMO)
         self.on_source_mode_changed(self.source_combo.currentText())
+
+    def _preset_controls(self):
+        names = (
+            "process_every", "live_frame_points", "offline_frame_points", "live_global_cap",
+            "offline_global_cap", "live_update_every", "max_distance_m", "point_size",
+            "live_keep_frames", "zed_confidence_threshold", "zed_texture_confidence_threshold",
+            "depth_minimum_distance_m", "depth_maximum_distance_m", "zed_depth_stabilization",
+            "enable_radius_outlier_filter", "radius_filter_radius_m", "radius_filter_min_neighbors",
+            "enable_voxel_downsampling", "voxel_size_m", "log_run_metrics", "auto_export_run_bundle",
+            "depth_combo", "playback_speed", "live_downsample", "offline_downsample", "live_voxel_size",
+            "offline_voxel_size", "color_mode", "uw_enable", "uw_color", "uw_clahe", "uw_denoise",
+            "uw_backscatter", "uw_confidence", "uw_metrics", "uw_strength", "uw_clahe_clip",
+            "uw_conf_threshold", "show_grid", "show_axes", "show_trajectory", "show_camera_marker",
+        )
+        return {name: getattr(self, name) for name in names}
+
+    def _notify_capture(self, message: str) -> None:
+        self.append_log(message)
+        if self.worker_thread is None:
+            self.status_line.setText(message)
+
+    @QtCore.Slot(str)
+    def on_ply_saved(self, path: str) -> None:
+        self.recent_exports.record(path, self._capture_source, self._capture_label)
 
     def _build_right_dock(self) -> None:
         dock = QDockWidget("Run details", self)
@@ -598,6 +630,9 @@ class MainWindow(QMainWindow):
         self.clear_scene_data()
         self._clear_completed_exports()
         self._fps_times.clear()
+        self._capture_source = self.source_combo.currentText()
+        self._capture_label = self.run_label.text().strip()
+        self.capture_presets.setEnabled(False)
         for label in self.metric_labels.values():
             label.setText("—")
         self.status_line.setText(f"{source_name} · Starting…")
@@ -610,6 +645,7 @@ class MainWindow(QMainWindow):
 
         self.worker_thread.started.connect(self.worker.run)
         self.worker.stats_updated.connect(self.on_stats_updated)
+        self.worker.ply_saved.connect(self.on_ply_saved)
         self.worker.cloud_updated.connect(self.on_cloud_updated)
         self.worker.traj_updated.connect(self.on_traj_updated)
         self.worker.camera_updated.connect(self.on_camera_updated)
@@ -672,9 +708,14 @@ class MainWindow(QMainWindow):
         if self._completed_map_points.shape[0] == 0:
             self.append_log("Export requested, but no completed map is available.")
             return
-        write_ply(out_path, self._completed_map_points, self._completed_map_colors)
+        try:
+            write_ply(out_path, self._completed_map_points, self._completed_map_colors)
+        except (OSError, ValueError) as exc:
+            self._notify_capture(f"Could not save PLY: {exc}")
+            return
+        self.on_ply_saved(out_path)
         self.metric_labels["last_export_path"].setText(out_path)
-        self.append_log(f"Exported completed map: {out_path}")
+        self._notify_capture(f"PLY saved: {Path(out_path).name}")
 
     def export_traj_now(self) -> None:
         hint = self.source_path.text().strip() or "demo"
@@ -866,6 +907,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.worker_thread = None
         self.btn_start.setEnabled(True)
+        self.capture_presets.setEnabled(True)
         self.source_combo.setEnabled(True)
         self._sync_source_controls()
         if self._closing_after_run:

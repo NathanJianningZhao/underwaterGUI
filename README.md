@@ -54,6 +54,12 @@ python -m src.app
 
 Select **Demo → Start mapping**. The viewport uses the synthetic scene; camera-image filters such as CLAHE and bilateral denoising need real image input and do not run on demo frames. **Map**, **Playback**, **Color / view**, and **Outputs** keep the controls separated. Open diagnostics with **Details** or **Log** in the status bar.
 
+### Save and reuse a capture setup
+
+- In **Map → Capture presets**, choose **Save as…** and give your settings a name. Choose a saved name and **Load** before starting a run. Load a preset, tweak it, and save under a new name to make a variation. Presets are local to this app installation; input files, run labels, and output directory paths are not part of a preset.
+- **Save PLY…** is beside the run controls and works during a run, while paused, or on a completed map. **Outputs → Recent PLY exports** lists the latest 40 successful manual and automatic PLY saves, newest first. Select one and open its folder to use the actual file in your analysis tool. The app records new saves; it does not index older folders or move, copy, or delete PLY files.
+
+
 The demo does not need the ZED SDK, but it does need a working Qt desktop and OpenGL. ZED recording playback and physical camera input require an [SDK-supported setup](https://docs.stereolabs.com/docs/development/zed-sdk/supported-platforms/).
 
 ## Windows Setup
@@ -152,7 +158,7 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-To include the demo window, live preview, and export smoke test, run
+To include the demo window, live preview, persistent capture presets, and export smoke test, run
 `ZED_GUI_TEST=1 python -m pytest -q` from a session with a Qt desktop and OpenGL
 (virtual display with software GL also works). This does not test real camera or SVO input.
 
