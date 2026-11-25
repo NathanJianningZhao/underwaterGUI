@@ -16,11 +16,21 @@ class ViewerController:
         self.widget = QWidget(parent)
         self._layout = QVBoxLayout(self.widget)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._placeholder: Optional[QLabel] = QLabel(
-            "PyVista viewport will initialize when processing starts.\n"
-            "This keeps startup lighter on macOS and VTK-heavy environments."
-        )
-        self._placeholder.setAlignment(Qt.AlignCenter)
+        self.widget.setObjectName("mapViewport")
+        self._placeholder: Optional[QWidget] = QWidget(self.widget)
+        placeholder_layout = QVBoxLayout(self._placeholder)
+        placeholder_layout.setSpacing(6)
+        placeholder_layout.addStretch()
+        for message, name in (
+            ("3D mapping workspace", "viewportTitle"),
+            ("Choose an input and select Start mapping to view the point cloud.", "viewportHint"),
+        ):
+            label = QLabel(message)
+            label.setObjectName(name)
+            label.setAlignment(Qt.AlignCenter)
+            label.setWordWrap(True)
+            placeholder_layout.addWidget(label)
+        placeholder_layout.addStretch()
         self._layout.addWidget(self._placeholder)
 
         self.viewer: Optional[QtInteractor] = None
@@ -44,11 +54,6 @@ class ViewerController:
         try:
             append_log("Initializing PyVista viewport...")
             self.viewer = QtInteractor(self.widget)
-            if self._placeholder is not None:
-                self._layout.removeWidget(self._placeholder)
-                self._placeholder.deleteLater()
-                self._placeholder = None
-            self._layout.addWidget(self.viewer.interactor)
             try:
                 self.viewer.disable_parallel_projection()
             except Exception:
@@ -56,14 +61,26 @@ class ViewerController:
                     self.viewer.camera.parallel_projection = False
                 except Exception:
                     pass
-            self.viewer.set_background("#1b1f24")
+            self.viewer.set_background("#0b1620")
             self.clear_scene_data(show_axes=True, show_grid=True)
+            self._layout.addWidget(self.viewer.interactor)
+            if self._placeholder is not None:
+                self._layout.removeWidget(self._placeholder)
+                self._placeholder.deleteLater()
+                self._placeholder = None
             append_log("PyVista viewport ready.")
             return True
         except Exception as exc:
+            self.close()
             QMessageBox.critical(self.widget, "Viewport Error", f"Failed to initialize PyVista viewport:\n{exc}")
             append_log(f"Viewport init failed: {exc}")
             return False
+
+    def close(self) -> None:
+        if self.viewer is not None:
+            viewer, self.viewer = self.viewer, None
+            viewer.close()
+            viewer.deleteLater()
 
     def reset_camera(self, append_log: Callable[[str], None]) -> None:
         if self.viewer is None:
@@ -141,6 +158,7 @@ class ViewerController:
                     self.viewer.remove_actor(self.live_cloud_actor)
                     self.live_cloud_actor = None
                     self.live_cloud = None
+                    self.viewer.render()
                 return
             if self.live_cloud is None:
                 self.live_cloud = pv.PolyData(points)
@@ -152,7 +170,13 @@ class ViewerController:
                     point_size=point_size,
                     render_points_as_spheres=False,
                     name="live_cloud",
+                    copy_mesh=False,
                 )
+            elif self.live_cloud.n_points != len(points):
+                # Rebuild vertex cells as well as coordinates when the point count changes.
+                replacement = pv.PolyData(points)
+                replacement["colors"] = colors_u8
+                self.live_cloud.shallow_copy(replacement)
             else:
                 self.live_cloud.points = points
                 self.live_cloud["colors"] = colors_u8
@@ -186,8 +210,7 @@ class ViewerController:
             else:
                 self.traj_poly.points = new_lines.points
                 self.traj_poly.lines = new_lines.lines
-            if not show_trajectory and self.traj_actor is not None:
-                self.traj_actor.SetVisibility(0)
+            self.traj_actor.SetVisibility(int(show_trajectory))
             self.viewer.render()
         except Exception as exc:
             self._render_failed = True
@@ -233,7 +256,7 @@ class ViewerController:
             return
         try:
             self.viewer.clear()
-            self.viewer.set_background("#1b1f24")
+            self.viewer.set_background("#0b1620")
             if show_axes:
                 self.viewer.show_axes()
             else:

@@ -10,9 +10,7 @@ from typing import Dict, Optional
 import numpy as np
 from PySide6 import QtCore
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -25,12 +23,14 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QTextEdit,
+    QPlainTextEdit,
+    QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from src.gui.appearance import apply_workbench_style, label_dock, scroll_panel
 from src.gui.controls import FloatParamWidget, IntParamWidget
 from src.gui.viewer import ViewerController
 from src.mapping.export import PROJECT_ROOT, default_export_path, write_ply, write_traj_csv
@@ -58,8 +58,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ZED SVO Mapping GUI")
-        self.resize(1600, 980)
+        self.setWindowTitle("ZED Mapping Workbench")
+        self.resize(1350, 850)
+        self._closing_after_run = False
 
         self.config_store = ConfigStore(WorkerConfig())
         self.worker_thread: Optional[QtCore.QThread] = None
@@ -74,7 +75,7 @@ class MainWindow(QMainWindow):
         self._default_svo_path = PROJECT_ROOT / "data" / "svo" / "sofa.svo"
 
         self._build_ui()
-        self._apply_dark_style()
+        apply_workbench_style(self)
         self._init_log_panel_controls()
         self._apply_backend_availability()
 
@@ -85,26 +86,26 @@ class MainWindow(QMainWindow):
         self._build_right_dock()
         self._build_bottom_dock()
 
-        self.status_line = QLabel("backend=- frame=0/0 t=0.0s processed=0 live=0 fps=0.0 tracking=OFF uw=OFF")
+        self.status_line = QLabel("Ready · Choose a source and start mapping")
+        self.status_line.setObjectName("runStatus")
         self.statusBar().addPermanentWidget(self.status_line, 1)
 
     def _build_left_dock(self) -> None:
-        dock = QDockWidget("Controls", self)
+        dock = QDockWidget("Workspace", self)
+        label_dock(dock)
         dock.setAllowedAreas(Qt.LeftDockWidgetArea)
         container = QWidget()
         root = QVBoxLayout(container)
 
-        source_group = QGroupBox("Source / Mode")
+        container.setMinimumWidth(320)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(14)
+
+        source_group = QGroupBox("Input")
         source_form = QFormLayout(source_group)
         self.source_combo = QComboBox()
         self.source_combo.addItems([SOURCE_DEMO, SOURCE_SVO, SOURCE_LIVE_ZED])
         self.source_combo.currentTextChanged.connect(self.on_source_mode_changed)
-        model = self.source_combo.model()
-        idx_live = self.source_combo.findText(SOURCE_LIVE_ZED)
-        if idx_live >= 0:
-            item = model.item(idx_live)
-            if item is not None:
-                item.setEnabled(has_pyzed())
 
         self.source_path = QLineEdit()
         self.source_path.setPlaceholderText("Optional source path")
@@ -116,23 +117,28 @@ class MainWindow(QMainWindow):
         source_row_layout.addWidget(self.source_path)
         source_row_layout.addWidget(self.btn_browse)
 
+        self.source_hint = QLabel()
+        self.source_hint.setWordWrap(True)
+        self.source_hint.setObjectName("mutedText")
         self.depth_combo = QComboBox()
         self._build_depth_combo()
 
         source_form.addRow("Data source", self.source_combo)
         source_form.addRow("Path", source_row)
         source_form.addRow("Depth mode", self.depth_combo)
+        source_form.addRow(self.source_hint)
 
         run_group = QGroupBox("Run Controls")
         run_layout = QVBoxLayout(run_group)
-        self.btn_start = QPushButton("Start")
+        self.btn_start = QPushButton("Start mapping")
+        self.btn_start.setObjectName("primaryAction")
         self.btn_pause = QPushButton("Pause")
         self.btn_stop = QPushButton("Stop")
-        self.btn_export = QPushButton("Export PLY Now")
-        self.btn_export_traj = QPushButton("Export Traj CSV")
-        self.btn_reset_cam = QPushButton("Reset Camera")
-        self.btn_clear_map = QPushButton("Reset Mapping")
-        self.btn_analyze_runs = QPushButton("Analyze Runs")
+        self.btn_export = QPushButton("Export point cloud…")
+        self.btn_export_traj = QPushButton("Export trajectory…")
+        self.btn_reset_cam = QPushButton("Reset view")
+        self.btn_clear_map = QPushButton("Clear map")
+        self.btn_analyze_runs = QPushButton("Analyze run folders")
 
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
@@ -149,19 +155,12 @@ class MainWindow(QMainWindow):
         self.btn_clear_map.clicked.connect(self.reset_mapping)
         self.btn_analyze_runs.clicked.connect(self.analyze_runs_now)
 
-        for btn in [
-            self.btn_start,
-            self.btn_pause,
-            self.btn_stop,
-            self.btn_export,
-            self.btn_export_traj,
-            self.btn_reset_cam,
-            self.btn_clear_map,
-            self.btn_analyze_runs,
-        ]:
-            run_layout.addWidget(btn)
+        transport = QHBoxLayout()
+        for button in (self.btn_start, self.btn_pause, self.btn_stop):
+            transport.addWidget(button, 1 if button is self.btn_start else 0)
+        run_layout.addLayout(transport)
 
-        params_group = QGroupBox("Mapping Parameters")
+        params_group = QGroupBox("Reconstruction")
         params_form = QFormLayout(params_group)
         self.process_every = IntParamWidget(1, 30, 3)
         self.live_frame_points = IntParamWidget(100, 10000, 400)
@@ -190,29 +189,25 @@ class MainWindow(QMainWindow):
         self.auto_export_run_bundle = QCheckBox("enable")
         self.auto_export_run_bundle.setChecked(True)
 
-        params_form.addRow("process_every", self.process_every)
-        params_form.addRow("live_frame_points", self.live_frame_points)
-        params_form.addRow("offline_frame_points", self.offline_frame_points)
-        params_form.addRow("live_global_cap", self.live_global_cap)
-        params_form.addRow("offline_global_cap", self.offline_global_cap)
-        params_form.addRow("live_update_every", self.live_update_every)
-        params_form.addRow("max_distance_m", self.max_distance_m)
-        params_form.addRow("point_size", self.point_size)
-        params_form.addRow("live_keep_frames", self.live_keep_frames)
-        params_form.addRow("zed_confidence_threshold", self.zed_confidence_threshold)
-        params_form.addRow("zed_texture_conf", self.zed_texture_confidence_threshold)
-        params_form.addRow("depth_minimum_distance_m", self.depth_minimum_distance_m)
-        params_form.addRow("depth_maximum_distance_m", self.depth_maximum_distance_m)
-        params_form.addRow("zed_depth_stabilization", self.zed_depth_stabilization)
-        params_form.addRow("enable_radius_outlier_filter", self.enable_radius_outlier_filter)
-        params_form.addRow("radius_filter_radius_m", self.radius_filter_radius_m)
-        params_form.addRow("radius_filter_min_neighbors", self.radius_filter_min_neighbors)
-        params_form.addRow("enable_voxel_downsampling", self.enable_voxel_downsampling)
-        params_form.addRow("voxel_size_m", self.voxel_size_m)
-        params_form.addRow("log_run_metrics", self.log_run_metrics)
-        params_form.addRow("run_metrics_dir", self.run_metrics_dir)
-        params_form.addRow("run_label", self.run_label)
-        params_form.addRow("auto_export_run_bundle", self.auto_export_run_bundle)
+        params_form.addRow("Process every N frames", self.process_every)
+        params_form.addRow("Preview points / frame", self.live_frame_points)
+        params_form.addRow("Export points / frame", self.offline_frame_points)
+        params_form.addRow("Preview point limit", self.live_global_cap)
+        params_form.addRow("Export point limit", self.offline_global_cap)
+        params_form.addRow("Preview refresh (frames)", self.live_update_every)
+        params_form.addRow("Map range (m)", self.max_distance_m)
+        params_form.addRow("Display point size", self.point_size)
+        params_form.addRow("Preview history (frames)", self.live_keep_frames)
+        params_form.addRow("Depth confidence", self.zed_confidence_threshold)
+        params_form.addRow("Texture confidence", self.zed_texture_confidence_threshold)
+        params_form.addRow("Minimum SDK depth (m)", self.depth_minimum_distance_m)
+        params_form.addRow("Maximum SDK depth (m)", self.depth_maximum_distance_m)
+        params_form.addRow("Depth stabilization", self.zed_depth_stabilization)
+        params_form.addRow("Radius outlier filter", self.enable_radius_outlier_filter)
+        params_form.addRow("Neighbor radius (m)", self.radius_filter_radius_m)
+        params_form.addRow("Minimum neighbors", self.radius_filter_min_neighbors)
+        params_form.addRow("Voxel downsampling", self.enable_voxel_downsampling)
+        params_form.addRow("Voxel size (m)", self.voxel_size_m)
 
         playback_group = QGroupBox("Playback / Sampling")
         playback_form = QFormLayout(playback_group)
@@ -227,27 +222,27 @@ class MainWindow(QMainWindow):
         self.offline_voxel_size = FloatParamWidget(0.01, 0.50, 0.08, 0.01)
         self.color_mode = QComboBox()
         self.color_mode.addItems(["RGB", "HEIGHT", "DISTANCE"])
-        self.seek_slider = QtCore.QObject()
         self.seek_widget = IntParamWidget(0, 1000, 0)
         self.seek_widget.valueChanged.connect(self.emit_seek)
 
-        playback_form.addRow("playback_speed", self.playback_speed)
-        playback_form.addRow("live_downsample", self.live_downsample)
-        playback_form.addRow("offline_downsample", self.offline_downsample)
-        playback_form.addRow("live_voxel_size", self.live_voxel_size)
-        playback_form.addRow("offline_voxel_size", self.offline_voxel_size)
-        playback_form.addRow("color_mode", self.color_mode)
-        playback_form.addRow("seek", self.seek_widget)
+        playback_form.addRow("Speed", self.playback_speed)
+        playback_form.addRow("Preview sampling", self.live_downsample)
+        playback_form.addRow("Export sampling", self.offline_downsample)
+        playback_form.addRow("Preview voxel (m)", self.live_voxel_size)
+        playback_form.addRow("Export voxel (m)", self.offline_voxel_size)
+        playback_form.addRow("Color by", self.color_mode)
+        playback_form.addRow("Seek (0–1000)", self.seek_widget)
 
         underwater_group = QGroupBox("Underwater Enhancement")
         underwater_form = QFormLayout(underwater_group)
-        self.uw_enable = QCheckBox("enable")
-        self.uw_color = QCheckBox("color")
-        self.uw_clahe = QCheckBox("clahe")
-        self.uw_denoise = QCheckBox("denoise")
-        self.uw_backscatter = QCheckBox("backscatter")
-        self.uw_confidence = QCheckBox("confidence hook")
-        self.uw_metrics = QCheckBox("metrics")
+        self.uw_enable = QCheckBox("Enable underwater processing")
+        self.uw_color = QCheckBox("White balance and color stretch")
+        self.uw_clahe = QCheckBox("Local contrast (CLAHE)")
+        self.uw_denoise = QCheckBox("Bilateral denoising")
+        self.uw_denoise.setToolTip("Requires camera imagery; synthetic demo frames do not have it.")
+        self.uw_backscatter = QCheckBox("Backscatter suppression")
+        self.uw_confidence = QCheckBox("Depth-confidence filter")
+        self.uw_metrics = QCheckBox("Record color metrics")
         self.uw_color.setChecked(True)
         self.uw_clahe.setChecked(True)
         self.uw_denoise.setChecked(True)
@@ -270,18 +265,22 @@ class MainWindow(QMainWindow):
             self.uw_metrics,
         ]:
             underwater_flags_layout.addWidget(widget)
-        underwater_form.addRow("features", underwater_flags)
-        underwater_form.addRow("strength", self.uw_strength)
-        underwater_form.addRow("clahe_clip", self.uw_clahe_clip)
-        underwater_form.addRow("conf_thresh", self.uw_conf_threshold)
+        underwater_hint = QLabel("Adjust how the point cloud is colored. Camera-image filters need a ZED image.")
+        underwater_hint.setWordWrap(True)
+        underwater_hint.setObjectName("mutedText")
+        underwater_form.addRow(underwater_hint)
+        underwater_form.addRow(underwater_flags)
+        underwater_form.addRow("Color strength", self.uw_strength)
+        underwater_form.addRow("Contrast limit", self.uw_clahe_clip)
+        underwater_form.addRow("Confidence threshold", self.uw_conf_threshold)
 
         view_group = QGroupBox("View Toggles")
         view_layout = QVBoxLayout(view_group)
-        self.show_grid = QCheckBox("show_grid")
-        self.show_axes = QCheckBox("show_axes")
-        self.show_trajectory = QCheckBox("show_trajectory")
-        self.show_camera_marker = QCheckBox("show_camera_marker")
-        self.freeze_live = QCheckBox("freeze_live_view")
+        self.show_grid = QCheckBox("Grid")
+        self.show_axes = QCheckBox("Orientation axes")
+        self.show_trajectory = QCheckBox("Camera trajectory")
+        self.show_camera_marker = QCheckBox("Camera marker")
+        self.freeze_live = QCheckBox("Freeze preview")
 
         self.show_grid.setChecked(True)
         self.show_axes.setChecked(True)
@@ -299,22 +298,36 @@ class MainWindow(QMainWindow):
 
         root.addWidget(source_group)
         root.addWidget(run_group)
-        root.addWidget(params_group)
-        root.addWidget(playback_group)
-        root.addWidget(underwater_group)
-        root.addWidget(view_group)
-        root.addStretch(1)
+        output_group = QGroupBox("Run outputs")
+        output_layout = QVBoxLayout(output_group)
+        for button in (self.btn_export, self.btn_export_traj, self.btn_analyze_runs):
+            output_layout.addWidget(button)
 
-        scroller = QScrollArea()
-        scroller.setWidgetResizable(True)
-        scroller.setWidget(container)
-        dock.setWidget(scroller)
+        run_settings = QGroupBox("Experiment files")
+        files_form = QFormLayout(run_settings)
+        for label, widget in (
+            ("Record frame metrics", self.log_run_metrics),
+            ("Metrics folder", self.run_metrics_dir),
+            ("Run label", self.run_label),
+            ("Auto-export run bundle", self.auto_export_run_bundle),
+        ):
+            files_form.addRow(label, widget)
+
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.addTab(scroll_panel(params_group), "Map")
+        self.settings_tabs.addTab(scroll_panel(playback_group), "Playback")
+        self.settings_tabs.addTab(scroll_panel(underwater_group, view_group), "Color / view")
+        self.settings_tabs.addTab(scroll_panel(output_group, run_settings), "Outputs")
+        view_layout.addWidget(self.btn_reset_cam)
+        view_layout.addWidget(self.btn_clear_map)
+        root.addWidget(self.settings_tabs, 1)
+        dock.setWidget(container)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
 
         self._connect_param_updates()
         self._connect_view_toggles()
 
-        if self._default_svo_path.exists():
+        if has_pyzed() and self._default_svo_path.is_file():
             self.source_combo.setCurrentText(SOURCE_SVO)
             self.source_path.setText(str(self._default_svo_path))
         else:
@@ -322,10 +335,14 @@ class MainWindow(QMainWindow):
         self.on_source_mode_changed(self.source_combo.currentText())
 
     def _build_right_dock(self) -> None:
-        dock = QDockWidget("Metrics / Status", self)
+        dock = QDockWidget("Run details", self)
+        label_dock(dock)
+        dock.setMinimumWidth(244)
         dock.setAllowedAreas(Qt.RightDockWidgetArea)
         panel = QWidget()
         form = QFormLayout(panel)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFormAlignment(Qt.AlignTop)
         self.metric_labels: Dict[str, QLabel] = {}
         keys = [
             "backend",
@@ -351,37 +368,54 @@ class MainWindow(QMainWindow):
             "post_radius_points",
             "post_voxel_points",
         ]
+        display_names = {
+            "backend": "Source", "live_rendered_points": "Preview points",
+            "effective_fps": "UI updates / sec", "source_pos": "Source position",
+            "source_len": "Source frames", "source_time_s": "Source time (s)",
+            "last_traj_path": "Last trajectory", "last_frames_path": "Last frame metrics",
+            "underwater_metrics": "Color metrics",
+        }
         for key in keys:
-            label = QLabel("-")
+            label = QLabel("—")
+            label.setTextFormat(Qt.PlainText)
             label.setWordWrap(True)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             self.metric_labels[key] = label
-            form.addRow(key, label)
-        dock.setWidget(panel)
+            form.addRow(display_names.get(key, key.replace("_", " ").capitalize()), label)
+        dock.setWidget(scroll_panel(panel))
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.details_dock = dock
+        dock.hide()
 
     def _build_bottom_dock(self) -> None:
-        dock = QDockWidget("Log Output", self)
+        dock = QDockWidget("Log", self)
+        label_dock(dock)
         dock.setAllowedAreas(Qt.BottomDockWidgetArea)
         dock.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable)
         dock.setFloating(False)
-        self.log_box = QTextEdit()
+        self.log_box = QPlainTextEdit()
+        self.log_box.setMaximumBlockCount(2000)
         self.log_box.setReadOnly(True)
         dock.setWidget(self.log_box)
         self.addDockWidget(Qt.BottomDockWidgetArea, dock)
         self.log_dock = dock
+        dock.hide()
 
     def _init_log_panel_controls(self) -> None:
-        self.btn_toggle_log = QPushButton("Log Panel")
-        self.btn_toggle_log.setCheckable(True)
-        self.btn_toggle_log.setChecked(True)
-        self.btn_toggle_log.clicked.connect(self.toggle_log_panel)
-        self.statusBar().addPermanentWidget(self.btn_toggle_log)
-
-        toggle_action = self.log_dock.toggleViewAction()
-        toggle_action.setShortcut("Ctrl+J")
-        self.addAction(toggle_action)
-        self.log_dock.visibilityChanged.connect(self.on_log_visibility_changed)
+        for dock, label, shortcut in (
+            (self.details_dock, "Details", "Ctrl+D"),
+            (self.log_dock, "Log", "Ctrl+J"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(not dock.isHidden())
+            button.clicked.connect(lambda checked, panel=dock: panel.setVisible(checked))
+            dock.visibilityChanged.connect(lambda visible, control=button: control.setChecked(visible))
+            self.statusBar().addPermanentWidget(button)
+            action = dock.toggleViewAction()
+            action.setShortcut(shortcut)
+            self.addAction(action)
 
     def _build_depth_combo(self) -> None:
         modes = ["PERFORMANCE", "QUALITY", "ULTRA", "NEURAL"]
@@ -405,11 +439,10 @@ class MainWindow(QMainWindow):
 
     def _apply_backend_availability(self) -> None:
         if not has_pyzed():
-            idx = self.source_combo.findText(SOURCE_LIVE_ZED)
-            if idx >= 0:
-                item = self.source_combo.model().item(idx)
-                if item is not None:
-                    item.setEnabled(False)
+            for mode in (SOURCE_SVO, SOURCE_LIVE_ZED):
+                item = self.source_combo.model().item(self.source_combo.findText(mode))
+                item.setEnabled(False)
+                item.setToolTip("Requires the Stereolabs ZED SDK and Python bindings.")
             self.append_log(pyzed_status_message())
 
     def _connect_param_updates(self) -> None:
@@ -487,9 +520,10 @@ class MainWindow(QMainWindow):
             if not path:
                 QMessageBox.warning(self, "Missing SVO", "Please select an SVO file first.")
                 return None, "", ""
-            if not Path(path).exists():
-                QMessageBox.warning(self, "Invalid SVO", f"Path does not exist:\n{path}")
+            if not Path(path).expanduser().is_file() or Path(path).suffix.lower() not in {".svo", ".svo2"}:
+                QMessageBox.warning(self, "Invalid SVO", f"Choose an existing .svo or .svo2 file:\n{path}")
                 return None, "", ""
+            path = str(Path(path).expanduser())
             return ZEDSVOFrameSource(path, config=config), "ZED", path
         if mode == SOURCE_LIVE_ZED:
             if not has_pyzed():
@@ -556,17 +590,19 @@ class MainWindow(QMainWindow):
         if self.worker_thread is not None:
             self.append_log("Worker already running.")
             return
-        if not self._ensure_plotter():
-            return
         self.gather_initial_config()
-
         source, source_name, path_hint = self.create_source()
-        if source is None:
+        if source is None or not self._ensure_plotter():
             return
 
         self.clear_scene_data()
         self._clear_completed_exports()
         self._fps_times.clear()
+        for label in self.metric_labels.values():
+            label.setText("—")
+        self.status_line.setText(f"{source_name} · Starting…")
+        self.source_combo.setEnabled(False)
+        self._sync_source_controls()
 
         self.worker_thread = QtCore.QThread(self)
         self.worker = MappingWorker(source=source, source_name=source_name, config_store=self.config_store, path_hint=path_hint)
@@ -581,6 +617,7 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.on_worker_finished)
 
         self.worker.finished.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.finished.connect(self.cleanup_worker_refs)
 
@@ -602,18 +639,25 @@ class MainWindow(QMainWindow):
         paused = self.btn_pause.text() == "Pause"
         self.worker.set_paused(paused)
         self.btn_pause.setText("Resume" if paused else "Pause")
+        self.status_line.setText("Paused" if paused else "Resuming…")
 
     def stop_processing(self) -> None:
         if self.worker is None:
             self.append_log("Stop ignored: worker not running.")
             return
         self.worker.request_stop()
+        self.btn_pause.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+        self.status_line.setText("Stopping…")
         self.append_log("Stop requested.")
 
     def reset_mapping(self) -> None:
         if self.worker is not None:
             self.worker.request_reset_mapping()
         self.clear_scene_data()
+        if self.worker is None:
+            self._clear_completed_exports()
+            self.btn_clear_map.setEnabled(False)
 
     def export_now(self) -> None:
         hint = self.source_path.text().strip() or "demo"
@@ -688,16 +732,25 @@ class MainWindow(QMainWindow):
 
     def on_source_mode_changed(self, mode: str) -> None:
         is_svo = mode == SOURCE_SVO
-        self.source_path.setEnabled(is_svo)
-        self.btn_browse.setEnabled(is_svo)
+        self._sync_source_controls()
         if is_svo:
             self.source_path.setPlaceholderText("Required .svo or .svo2 path")
             if not self.source_path.text().strip() and self._default_svo_path.exists():
                 self.source_path.setText(str(self._default_svo_path))
+            self.source_hint.setText("Replay a recorded ZED session.")
         elif mode == SOURCE_DEMO:
-            self.source_path.setPlaceholderText("Demo mode does not require a path")
+            self.source_path.setPlaceholderText("No file needed")
+            self.source_hint.setText("Synthetic scene · no camera or SDK needed")
         else:
-            self.source_path.setPlaceholderText("Live ZED camera does not require a file path")
+            self.source_path.setPlaceholderText("No file needed")
+            self.source_hint.setText("Stream from a connected ZED camera.")
+
+    def _sync_source_controls(self) -> None:
+        mode = self.source_combo.currentText()
+        idle = self.source_combo.isEnabled()
+        self.source_path.setEnabled(idle and mode == SOURCE_SVO)
+        self.btn_browse.setEnabled(idle and mode == SOURCE_SVO)
+        self.depth_combo.setEnabled(mode != SOURCE_DEMO)
 
     def on_playback_speed_changed(self, text: str) -> None:
         self.config_store.update(playback_speed=self._parse_playback_speed(text))
@@ -777,16 +830,13 @@ class MainWindow(QMainWindow):
             self.seek_widget.setValue(int(np.clip(src_pos / max(1, src_len - 1), 0.0, 1.0) * 1000))
             self._suppress_seek_emit = False
 
-        self.status_line.setText(
-            f"backend={stats.get('backend', '-')} "
-            f"frame={stats.get('source_pos', 0)}/{stats.get('source_len', 0)} "
-            f"t={float(stats.get('source_time_s', 0.0)):.1f}s "
-            f"processed={stats.get('processed_count', 0)} "
-            f"live={stats.get('live_rendered_points', 0)} "
-            f"fps={self.metric_labels['effective_fps'].text()} "
-            f"tracking={stats.get('tracking_state', 'OFF')} "
-            f"uw={stats.get('underwater_status', 'OFF')}"
-        )
+        if self.btn_stop.isEnabled() and self.btn_pause.text() != "Resume":
+            self.status_line.setText(
+                f"{stats.get('backend', '—')}  ·  "
+                f"{float(stats.get('source_time_s', 0.0)):.1f} s  ·  "
+                f"{stats.get('live_rendered_points', 0):,} preview points  ·  "
+                f"Tracking: {stats.get('tracking_state', '—')}"
+            )
 
     def on_cloud_updated(self, points: np.ndarray, colors_u8: np.ndarray) -> None:
         self.viewer_controller.update_cloud(points, colors_u8, self.point_size.value(), self.append_log)
@@ -802,7 +852,7 @@ class MainWindow(QMainWindow):
             self._completed_map_points, self._completed_map_colors = self.worker.snapshot_map()
             self._completed_traj = self.worker.snapshot_traj()
         self.append_log(message)
-        self.btn_start.setEnabled(True)
+        self.status_line.setText("Run finished" if success else "Run failed · See details or log")
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("Pause")
         self.btn_stop.setEnabled(False)
@@ -813,10 +863,13 @@ class MainWindow(QMainWindow):
             self.metric_labels["last_error"].setText(message)
 
     def cleanup_worker_refs(self) -> None:
-        if self.worker is not None:
-            self.worker.deleteLater()
         self.worker = None
         self.worker_thread = None
+        self.btn_start.setEnabled(True)
+        self.source_combo.setEnabled(True)
+        self._sync_source_controls()
+        if self._closing_after_run:
+            QtCore.QTimer.singleShot(0, self.close)
 
     def _clear_completed_exports(self) -> None:
         self._completed_map_points = np.empty((0, 3), dtype=np.float32)
@@ -833,15 +886,7 @@ class MainWindow(QMainWindow):
 
     def append_log(self, text: str) -> None:
         timestamp = dt.datetime.now().strftime("%H:%M:%S")
-        self.log_box.append(f"[{timestamp}] {text}")
-
-    def toggle_log_panel(self) -> None:
-        self.log_dock.setVisible(not self.log_dock.isVisible())
-
-    def on_log_visibility_changed(self, visible: bool) -> None:
-        self.btn_toggle_log.blockSignals(True)
-        self.btn_toggle_log.setChecked(visible)
-        self.btn_toggle_log.blockSignals(False)
+        self.log_box.appendPlainText(f"[{timestamp}] {text}")
 
     @staticmethod
     def _parse_playback_speed(text: str) -> float:
@@ -850,38 +895,12 @@ class MainWindow(QMainWindow):
         except Exception:
             return 1.0
 
-    def _apply_dark_style(self) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#1f232a"))
-        palette.setColor(QPalette.WindowText, QColor("#d8dee9"))
-        palette.setColor(QPalette.Base, QColor("#171a20"))
-        palette.setColor(QPalette.AlternateBase, QColor("#20242c"))
-        palette.setColor(QPalette.Text, QColor("#d8dee9"))
-        palette.setColor(QPalette.Button, QColor("#2b303b"))
-        palette.setColor(QPalette.ButtonText, QColor("#e5e9f0"))
-        palette.setColor(QPalette.Highlight, QColor("#4c7899"))
-        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-        app.setPalette(palette)
-        app.setStyleSheet(
-            """
-            QMainWindow, QWidget { background-color: #1f232a; color: #d8dee9; }
-            QGroupBox { border: 1px solid #3b4252; border-radius: 6px; margin-top: 10px; padding: 8px; font-weight: 600; }
-            QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-            QPushButton { background-color: #334155; border: 1px solid #4b5563; border-radius: 4px; padding: 6px 8px; }
-            QPushButton:hover { background-color: #3d4f66; }
-            QPushButton:disabled { color: #6b7280; background-color: #27303d; }
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit { border: 1px solid #475569; border-radius: 4px; padding: 3px; }
-            QDockWidget::title { background: #2a2f38; padding: 6px; text-align: left; }
-            """
-        )
-
     def closeEvent(self, event) -> None:
-        if self.worker is not None:
-            self.worker.request_stop()
         if self.worker_thread is not None:
-            self.worker_thread.quit()
-            self.worker_thread.wait(5000)
+            event.ignore()
+            if not self._closing_after_run:
+                self._closing_after_run = True
+                self.stop_processing()
+            return
+        self.viewer_controller.close()
         super().closeEvent(event)

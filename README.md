@@ -1,6 +1,6 @@
-# ZED Mapping Shareable
+# ZED Mapping Workbench
 
-A shareable, trimmed project for the ZED SVO mapping GUI.
+A desktop workbench for previewing and exporting point clouds from ZED cameras and recordings. Use the built-in synthetic scene to try the controls without a camera, SDK, or capture file.
 
 This repo contains the code needed to run the GUI, demo mode, and the underwater enhancement backend pipeline. Generated maps, analysis outputs, virtual environments, and local SVO captures are ignored by git.
 
@@ -14,7 +14,7 @@ This repo contains the code needed to run the GUI, demo mode, and the underwater
 - `requirements.txt`
 - Windows setup and run scripts
 
-Optional local data can be placed under `data/svo/`. The app looks for `data/svo/sofa.svo` on startup and falls back to Demo mode when that file is missing.
+Optional local data can be placed under `data/svo/`. The app chooses the local `data/svo/sofa.svo` on startup only when both that file and the ZED bindings are available. Otherwise it opens in Demo mode.
 
 ## What This App Does
 
@@ -40,6 +40,21 @@ For real ZED SVO playback or live camera streaming:
 - A supported Python version for your installed ZED SDK
 
 Without the ZED SDK, the app still starts in Demo mode.
+
+## Try the demo
+
+On macOS or Linux, from the project root:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m src.app
+```
+
+Select **Demo → Start mapping**. The viewport uses the synthetic scene; camera-image filters such as CLAHE and bilateral denoising need real image input and do not run on demo frames. **Map**, **Playback**, **Color / view**, and **Outputs** keep the controls separated. Open diagnostics with **Details** or **Log** in the status bar.
+
+The demo does not need the ZED SDK, but it does need a working Qt desktop and OpenGL. ZED recording playback and physical camera input require an [SDK-supported setup](https://docs.stereolabs.com/docs/development/zed-sdk/supported-platforms/).
 
 ## Windows Setup
 
@@ -129,6 +144,17 @@ zed_mapping_shareable/
   setup_windows.bat
   setup_windows.ps1
 ```
+
+## Tests
+
+```sh
+python -m pip install pytest
+python -m pytest -q
+```
+
+To include the demo window, live preview, and export smoke test, run
+`ZED_GUI_TEST=1 python -m pytest -q` from a session with a Qt desktop and OpenGL
+(virtual display with software GL also works). This does not test real camera or SVO input.
 
 ## Notes
 

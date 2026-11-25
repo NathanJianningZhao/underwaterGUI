@@ -315,13 +315,17 @@ class MappingWorker(QtCore.QObject):
             cols = cols[idx]
         return pts.astype(np.float32), cols.astype(np.uint8)
 
-    def _emit_stats(self, frame: Dict, config: WorkerConfig, live_rendered_points: int = 0) -> None:
+    def _emit_stats(self, frame: Dict, config: WorkerConfig, live_rendered_points: Optional[int] = None) -> None:
         stats = {
             "backend": self.source_name,
             "frame_count": int(frame["source_pos"]),
             "processed_count": self._processed_count,
             "tracking_state": frame.get("tracking_state", "OK"),
-            "live_rendered_points": int(live_rendered_points),
+            "live_rendered_points": (
+                self._last_stats.get("live_rendered_points", 0)
+                if live_rendered_points is None
+                else int(live_rendered_points)
+            ),
             "source_pos": int(frame["source_pos"]),
             "source_len": int(frame["source_len"]),
             "source_time_s": float(frame["source_time_s"]),
